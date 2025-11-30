@@ -29,6 +29,42 @@ function formatPackets(packets) {
 	return packets.toString();
 }
 
+function calcTotalMemory(memRegions) {
+	var totalMemory = 0;
+	memRegions.forEach(function(region) {
+		var sizeStr = region.size || '';
+		var match = sizeStr.match(/(\d+)\s*(KiB|MiB|GiB|KB|MB|GB)/i);
+		if (match) {
+			var size = parseInt(match[1]);
+			var unit = match[2].toUpperCase();
+			if (unit === 'KIB' || unit === 'KB') totalMemory += size;
+			else if (unit === 'MIB' || unit === 'MB') totalMemory += size * 1024;
+			else if (unit === 'GIB' || unit === 'GB') totalMemory += size * 1024 * 1024;
+		}
+	});
+	return totalMemory >= 1024 ? (totalMemory / 1024).toFixed(0) + ' MiB' : totalMemory + ' KiB';
+}
+
+function renderPpeRows(entries) {
+	return entries.slice(0, 100).map(function(entry) {
+		var stateClass = entry.state === 'BND' ? 'label-success' : '';
+		var ethDisplay = entry.eth || '';
+		if (ethDisplay === '00:00:00:00:00:00->00:00:00:00:00:00') {
+			ethDisplay = '-';
+		}
+		return E('tr', { 'class': 'tr' }, [
+			E('td', { 'class': 'td' }, entry.index),
+			E('td', { 'class': 'td' }, E('span', { 'class': stateClass }, entry.state)),
+			E('td', { 'class': 'td' }, entry.type),
+			E('td', { 'class': 'td' }, entry.orig || '-'),
+			E('td', { 'class': 'td' }, entry.new_flow || '-'),
+			E('td', { 'class': 'td' }, ethDisplay),
+			E('td', { 'class': 'td' }, formatPackets(entry.packets || 0)),
+			E('td', { 'class': 'td' }, formatBytes(entry.bytes || 0))
+		]);
+	});
+}
+
 return view.extend({
 	load: function() {
 		return Promise.all([
@@ -42,23 +78,9 @@ return view.extend({
 		var ppeData = data[1] || {};
 		var entries = Array.isArray(ppeData.entries) ? ppeData.entries : [];
 		var memRegions = Array.isArray(status.memory_regions) ? status.memory_regions : [];
+		var totalMemoryStr = calcTotalMemory(memRegions);
 
-		// Calculate total memory size from regions
-		var totalMemory = 0;
-		memRegions.forEach(function(region) {
-			var sizeStr = region.size || '';
-			var match = sizeStr.match(/(\d+)\s*(KiB|MiB|GiB|KB|MB|GB)/i);
-			if (match) {
-				var size = parseInt(match[1]);
-				var unit = match[2].toUpperCase();
-				if (unit === 'KIB' || unit === 'KB') totalMemory += size;
-				else if (unit === 'MIB' || unit === 'MB') totalMemory += size * 1024;
-				else if (unit === 'GIB' || unit === 'GB') totalMemory += size * 1024 * 1024;
-			}
-		});
-		var totalMemoryStr = totalMemory >= 1024 ? (totalMemory / 1024).toFixed(0) + ' MiB' : totalMemory + ' KiB';
-
-		var view = E('div', { 'class': 'cbi-map' }, [
+		var viewEl = E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, _('Airoha NPU Status')),
 
 			// NPU Information Section
@@ -67,25 +89,25 @@ return view.extend({
 				E('table', { 'class': 'table' }, [
 					E('tr', { 'class': 'tr' }, [
 						E('td', { 'class': 'td', 'width': '33%' }, E('strong', {}, _('NPU Firmware Version'))),
-						E('td', { 'class': 'td' }, status.npu_version || _('Not available'))
+						E('td', { 'class': 'td', 'id': 'npu-version' }, status.npu_version || _('Not available'))
 					]),
 					E('tr', { 'class': 'tr' }, [
 						E('td', { 'class': 'td' }, E('strong', {}, _('NPU Status'))),
-						E('td', { 'class': 'td' }, status.npu_loaded ?
+						E('td', { 'class': 'td', 'id': 'npu-status' }, status.npu_loaded ?
 							E('span', { 'class': 'label-success' }, _('Active') + (status.npu_device ? ' (' + status.npu_device + ')' : '')) :
 							E('span', { 'class': 'label-danger' }, _('Not Active')))
 					]),
 					E('tr', { 'class': 'tr' }, [
 						E('td', { 'class': 'td' }, E('strong', {}, _('NPU Clock / Cores'))),
-						E('td', { 'class': 'td' }, (status.npu_clock ? (status.npu_clock / 1000000).toFixed(0) + ' MHz' : 'N/A') + ' / ' + (status.npu_cores || 0) + ' cores')
+						E('td', { 'class': 'td', 'id': 'npu-clock' }, (status.npu_clock ? (status.npu_clock / 1000000).toFixed(0) + ' MHz' : 'N/A') + ' / ' + (status.npu_cores || 0) + ' cores')
 					]),
 					E('tr', { 'class': 'tr' }, [
 						E('td', { 'class': 'td' }, E('strong', {}, _('Reserved Memory'))),
-						E('td', { 'class': 'td' }, totalMemoryStr + ' (' + memRegions.length + ' regions)')
+						E('td', { 'class': 'td', 'id': 'npu-memory' }, totalMemoryStr + ' (' + memRegions.length + ' regions)')
 					]),
 					E('tr', { 'class': 'tr' }, [
 						E('td', { 'class': 'td' }, E('strong', {}, _('Offload Statistics'))),
-						E('td', { 'class': 'td' }, formatPackets(status.offload_packets || 0) + ' packets / ' + formatBytes(status.offload_bytes || 0))
+						E('td', { 'class': 'td', 'id': 'npu-offload' }, formatPackets(status.offload_packets || 0) + ' packets / ' + formatBytes(status.offload_bytes || 0))
 					])
 				])
 			]),
@@ -93,7 +115,7 @@ return view.extend({
 			// PPE Flow Offload Section
 			E('div', { 'class': 'cbi-section' }, [
 				E('h3', {}, _('PPE Flow Offload Entries')),
-				E('div', { 'class': 'cbi-section-descr' },
+				E('div', { 'class': 'cbi-section-descr', 'id': 'ppe-summary' },
 					_('Total: ') + entries.length + ' | ' +
 					_('Bound: ') + entries.filter(function(e) { return e.state === 'BND'; }).length + ' | ' +
 					_('Unbound: ') + entries.filter(function(e) { return e.state === 'UNB'; }).length
@@ -109,24 +131,7 @@ return view.extend({
 						E('th', { 'class': 'th' }, _('Packets')),
 						E('th', { 'class': 'th' }, _('Bytes'))
 					])
-				].concat(entries.slice(0, 100).map(function(entry) {
-					var stateClass = entry.state === 'BND' ? 'label-success' : '';
-					// Format eth: show only non-zero MACs
-					var ethDisplay = entry.eth || '';
-					if (ethDisplay === '00:00:00:00:00:00->00:00:00:00:00:00') {
-						ethDisplay = '-';
-					}
-					return E('tr', { 'class': 'tr' }, [
-						E('td', { 'class': 'td' }, entry.index),
-						E('td', { 'class': 'td' }, E('span', { 'class': stateClass }, entry.state)),
-						E('td', { 'class': 'td' }, entry.type),
-						E('td', { 'class': 'td' }, entry.orig || '-'),
-						E('td', { 'class': 'td' }, entry.new_flow || '-'),
-						E('td', { 'class': 'td' }, ethDisplay),
-						E('td', { 'class': 'td' }, formatPackets(entry.packets || 0)),
-						E('td', { 'class': 'td' }, formatBytes(entry.bytes || 0))
-					]);
-				})))
+				].concat(renderPpeRows(entries)))
 			])
 		]);
 
@@ -136,13 +141,58 @@ return view.extend({
 				callNpuStatus(),
 				callPpeEntries()
 			]).then(L.bind(function(data) {
-				// Update status fields
 				var status = data[0] || {};
-				// Could add dynamic updates here
+				var ppeData = data[1] || {};
+				var entries = Array.isArray(ppeData.entries) ? ppeData.entries : [];
+				var memRegions = Array.isArray(status.memory_regions) ? status.memory_regions : [];
+
+				// Update NPU status fields
+				var offloadEl = document.getElementById('npu-offload');
+				if (offloadEl) {
+					offloadEl.textContent = formatPackets(status.offload_packets || 0) + ' packets / ' + formatBytes(status.offload_bytes || 0);
+				}
+
+				var statusEl = document.getElementById('npu-status');
+				if (statusEl) {
+					statusEl.innerHTML = '';
+					if (status.npu_loaded) {
+						var span = document.createElement('span');
+						span.className = 'label-success';
+						span.textContent = _('Active') + (status.npu_device ? ' (' + status.npu_device + ')' : '');
+						statusEl.appendChild(span);
+					} else {
+						var span = document.createElement('span');
+						span.className = 'label-danger';
+						span.textContent = _('Not Active');
+						statusEl.appendChild(span);
+					}
+				}
+
+				// Update PPE summary
+				var summaryEl = document.getElementById('ppe-summary');
+				if (summaryEl) {
+					summaryEl.textContent = _('Total: ') + entries.length + ' | ' +
+						_('Bound: ') + entries.filter(function(e) { return e.state === 'BND'; }).length + ' | ' +
+						_('Unbound: ') + entries.filter(function(e) { return e.state === 'UNB'; }).length;
+				}
+
+				// Update PPE table
+				var table = document.getElementById('ppe-entries-table');
+				if (table) {
+					// Remove all rows except header
+					while (table.rows.length > 1) {
+						table.deleteRow(1);
+					}
+					// Add new rows
+					var newRows = renderPpeRows(entries);
+					newRows.forEach(function(row) {
+						table.appendChild(row);
+					});
+				}
 			}, this));
 		}, this), 5);
 
-		return view;
+		return viewEl;
 	},
 
 	handleSaveApply: null,
