@@ -1,13 +1,14 @@
 {
 	"luci-app-airoha-npu": {
-		"description": "Grant access to Airoha NPU status",
+		"description": "Grant access to Airoha SoC status (NPU + CPU)",
 		"read": {
 			"ubus": {
 				"luci.airoha_npu": [ "getStatus", "getPpeEntries" ]
 			},
 			"file": {
 				"/sys/kernel/debug/ppe/entries": [ "read" ],
-				"/sys/kernel/debug/ppe/bind": [ "read" ]
+				"/sys/kernel/debug/ppe/bind": [ "read" ],
+				"/sys/devices/system/cpu/cpufreq/policy0/*": [ "read" ]
 			}
 		}
 	}

@@ -29,6 +29,11 @@ function formatPackets(packets) {
 	return packets.toString();
 }
 
+function formatFreqMHz(khz) {
+	if (!khz || khz === 0) return 'N/A';
+	return (khz / 1000).toFixed(0) + ' MHz';
+}
+
 function calcTotalMemory(memRegions) {
 	var totalMemory = 0;
 	memRegions.forEach(function(region) {
@@ -43,6 +48,65 @@ function calcTotalMemory(memRegions) {
 		}
 	});
 	return totalMemory >= 1024 ? (totalMemory / 1024).toFixed(0) + ' MiB' : totalMemory + ' KiB';
+}
+
+function renderGovernorBadges(availGovs, activeGov) {
+	var govs = (availGovs || '').trim().split(/\s+/).filter(function(g) { return g.length > 0; });
+	if (govs.length === 0) return E('span', {}, 'N/A');
+
+	return E('span', { 'id': 'cpu-governors' }, govs.map(function(gov) {
+		var isActive = (gov === activeGov);
+		var style = isActive
+			? 'display:inline-block;padding:2px 8px;margin:2px 3px;border-radius:3px;background:#2e7d32;color:#fff;font-weight:bold;font-size:90%'
+			: 'display:inline-block;padding:2px 8px;margin:2px 3px;border-radius:3px;background:#444;color:#aaa;font-size:90%';
+		return E('span', { 'style': style, 'data-gov': gov }, gov);
+	}));
+}
+
+function updateGovernorBadges(container, activeGov) {
+	if (!container) return;
+	var badges = container.querySelectorAll('span[data-gov]');
+	badges.forEach(function(badge) {
+		var gov = badge.getAttribute('data-gov');
+		if (gov === activeGov) {
+			badge.style.background = '#2e7d32';
+			badge.style.color = '#fff';
+			badge.style.fontWeight = 'bold';
+		} else {
+			badge.style.background = '#444';
+			badge.style.color = '#aaa';
+			badge.style.fontWeight = 'normal';
+		}
+	});
+}
+
+function renderFreqBar(hwFreq, minFreq, maxFreq) {
+	if (!maxFreq || maxFreq === 0) return E('span', {}, 'N/A');
+	var pct = Math.round(((hwFreq - minFreq) / (maxFreq - minFreq)) * 100);
+	if (pct < 0) pct = 0;
+	if (pct > 100) pct = 100;
+
+	return E('div', { 'id': 'cpu-freq-bar-wrap', 'style': 'display:flex;align-items:center;gap:10px' }, [
+		E('span', { 'style': 'color:#aaa;font-size:90%' }, formatFreqMHz(minFreq)),
+		E('div', { 'style': 'flex:1;background:#333;border-radius:4px;height:22px;position:relative;min-width:180px;max-width:350px' }, [
+			E('div', { 'id': 'cpu-freq-fill', 'style': 'background:linear-gradient(90deg,#2e7d32,#66bb6a);height:100%;border-radius:4px;width:' + pct + '%;transition:width 0.5s ease' }),
+			E('span', { 'id': 'cpu-freq-text', 'style': 'position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:13px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.6)' },
+				formatFreqMHz(hwFreq)),
+		]),
+		E('span', { 'style': 'color:#aaa;font-size:90%' }, formatFreqMHz(maxFreq))
+	]);
+}
+
+function updateFreqBar(hwFreq, minFreq, maxFreq) {
+	var textEl = document.getElementById('cpu-freq-text');
+	var fillEl = document.getElementById('cpu-freq-fill');
+	if (textEl) textEl.textContent = formatFreqMHz(hwFreq);
+	if (fillEl && maxFreq > 0) {
+		var pct = Math.round(((hwFreq - minFreq) / (maxFreq - minFreq)) * 100);
+		if (pct < 0) pct = 0;
+		if (pct > 100) pct = 100;
+		fillEl.style.width = pct + '%';
+	}
 }
 
 function renderPpeRows(entries) {
@@ -81,7 +145,28 @@ return view.extend({
 		var totalMemoryStr = calcTotalMemory(memRegions);
 
 		var viewEl = E('div', { 'class': 'cbi-map' }, [
-			E('h2', {}, _('Airoha NPU Status')),
+			E('h2', {}, _('Airoha SoC Status')),
+
+			// CPU Frequency Section
+			E('div', { 'class': 'cbi-section' }, [
+				E('h3', {}, _('CPU Frequency')),
+				E('table', { 'class': 'table' }, [
+					E('tr', { 'class': 'tr' }, [
+						E('td', { 'class': 'td', 'width': '33%' }, E('strong', {}, _('Current Frequency'))),
+						E('td', { 'class': 'td' },
+							renderFreqBar(status.cpu_hw_freq, status.cpu_min_freq, status.cpu_max_freq))
+					]),
+					E('tr', { 'class': 'tr' }, [
+						E('td', { 'class': 'td' }, E('strong', {}, _('Governor'))),
+						E('td', { 'class': 'td' },
+							renderGovernorBadges(status.cpu_avail_governors, status.cpu_governor))
+					]),
+					E('tr', { 'class': 'tr' }, [
+						E('td', { 'class': 'td' }, E('strong', {}, _('CPU Cores'))),
+						E('td', { 'class': 'td' }, (status.cpu_count || 0).toString())
+					])
+				])
+			]),
 
 			// NPU Information Section
 			E('div', { 'class': 'cbi-section' }, [
@@ -135,7 +220,7 @@ return view.extend({
 			])
 		]);
 
-		// Setup polling for live updates
+		// Setup polling for live updates (5 second interval)
 		poll.add(L.bind(function() {
 			return Promise.all([
 				callNpuStatus(),
@@ -144,14 +229,21 @@ return view.extend({
 				var status = data[0] || {};
 				var ppeData = data[1] || {};
 				var entries = Array.isArray(ppeData.entries) ? ppeData.entries : [];
-				var memRegions = Array.isArray(status.memory_regions) ? status.memory_regions : [];
 
-				// Update NPU status fields
+				// Update CPU frequency bar
+				updateFreqBar(status.cpu_hw_freq, status.cpu_min_freq, status.cpu_max_freq);
+
+				// Update governor badges
+				var govContainer = document.getElementById('cpu-governors');
+				updateGovernorBadges(govContainer, status.cpu_governor);
+
+				// Update NPU offload stats
 				var offloadEl = document.getElementById('npu-offload');
 				if (offloadEl) {
 					offloadEl.textContent = formatPackets(status.offload_packets || 0) + ' packets / ' + formatBytes(status.offload_bytes || 0);
 				}
 
+				// Update NPU status
 				var statusEl = document.getElementById('npu-status');
 				if (statusEl) {
 					statusEl.innerHTML = '';
@@ -179,11 +271,9 @@ return view.extend({
 				// Update PPE table
 				var table = document.getElementById('ppe-entries-table');
 				if (table) {
-					// Remove all rows except header
 					while (table.rows.length > 1) {
 						table.deleteRow(1);
 					}
-					// Add new rows
 					var newRows = renderPpeRows(entries);
 					newRows.forEach(function(row) {
 						table.appendChild(row);
